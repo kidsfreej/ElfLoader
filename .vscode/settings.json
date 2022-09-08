@@ -1,0 +1,10 @@
+{
+    "files.associations": {
+        "elfloader.h": "c",
+        "windows.h": "c",
+        "memory.h": "c",
+        "stdint.h": "c",
+        "datastructures.h": "c",
+        "stdio.h": "c"
+    }
+}
