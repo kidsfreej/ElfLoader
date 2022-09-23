@@ -8,6 +8,8 @@ void elfLoad(char* filename){
     global_needed_libraries= initVector();
     loadedLibs = initVector();
     Elf64 e=loadElf(filename);
+    dumpSymbols(&e,e.linkInfo.dynamic_symtab);
+    printf("%d",hashtableGet(&e,"printf").undef);
     runElf(e);
     freeElf(&e);
 }
@@ -24,7 +26,17 @@ unsigned long elf_Hash(const unsigned char *name)
         }
         return h;
 }
+uint32_t
+dl_new_hash (const char *s)
+{
+	        uint32_t h = 5381;
 
+			        for (unsigned char c = *s; c != '\0'; c = *++s)
+						                h = h * 33 + c;
+
+					        return h;
+							
+}
 size_t loadFile( char* filename,char* buffer,size_t size){
 	FILE* f =fopen(filename,"rb");
     if(!f){
@@ -120,20 +132,40 @@ void loadSection(char* buffer,Elf64_Shdr* hdr,Elf64* e){
     }
 }
 
-// Elf64_Xword hashtableGet(Elf64* e,char * symbol){
-//     char* hashtable =&e->buffer[e->linkInfo.hashtab->sh_offset];
-//     Elf64_Word nbucket= *(Elf64_Word*)&hashtable[0];
-//     Elf64_Word nchain= *(Elf64_Word*)&hashtable[sizeof(Elf64_Word)];
-//     Elf64_Word* bucket = &hashtable[sizeof(Elf64_Word)*2];
-//     Elf64_Word* chain = &hashtable[sizeof(Elf64_Word)*(nbucket+2)];
-//     unsigned long hash = elf_Hash(symbol);
-//     Elf64_Word index = bucket[hash%nbucket];
+Symbol hashtableGet(Elf64*e, char* symbol){
+    typedef struct ElfHashtable{
+       Elf64_Word nbucket; 
+       Elf64_Word nchain; 
+       Elf64_Word table[]; 
+    }ElfHashtable;
+    ElfHashtable* h = &e->buffer[e->linkInfo.hashtable->sh_offset];
+    Elf64_Word* buckets=  &h->table[0];
+    Elf64_Word* chain=  &h->table[h->nbucket];
+    Symtab symtab = e->linkInfo.dynamic_symtab;
+    Strtab strtab = e->linkInfo.dynamic_strtab;
+    unsigned long hash = elf_Hash(symbol);
+    if(h->nbucket+h->nchain+2>e->linkInfo.hashtable->sh_size/sizeof(Elf64_Word)){
+        printf("ERROR LINE: ",__LINE__,"INVALID HASH TABLE SIZE INCORRECT");
+    }
 
-//     while(chain[index]!=index){
-//         index = chain[index];
-//     }
-//     return *(Elf64_Xword*) &e->buffer[e->linkInfo.symtab->sh_offset+index];
-// }
+    Elf64_Word i = buckets[hash%h->nbucket];
+    while(strcmp(&strtab.strtab[symtab.symtab[i].st_name],symbol)!=0){
+        i = chain[i];
+        if(i==0){
+            Symbol s={0};
+            
+            s.undef = true;
+            s.object=e;
+            return s;
+        }
+    }
+    Symbol s={0};
+    s.str =&strtab.strtab[symtab.symtab[i].st_name];
+    s.undef=false;
+    s.sym = symtab.symtab[i]; 
+    s.object = e;
+    return s;
+ }
 
 char* getSectionName(Elf64* e,Elf64_Shdr* hdr){
     Elf64_Shdr* symstrtab = &e->section_headers[e->header.e_shstrndx];
@@ -154,12 +186,12 @@ int indexToIndex(Elf64* e,Elf64_Shdr* hdr,size_t index){
 
     return -1;
 }
-void dumpSymbols(Elf64* e,Elf64_Shdr* hdr){
-    Elf64_Shdr* strtab = &e->section_headers[hdr->sh_link];
-    Elf64_Sym* symtab = &e->buffer[hdr->sh_offset];
+void dumpSymbols(Elf64* e,Symtab stab){
+    Elf64_Sym* symtab = stab.symtab;
+    Elf64_Shdr* strtab = &e->section_headers[stab.hdr->sh_link];
     
-    printf("\n\nSection name: %s\n\n",getSectionName(e,hdr));
-    for(Elf64_Sym* i =symtab;i<&e->buffer[hdr->sh_offset+hdr->sh_size];i++){
+    printf("\n\nSection name: %s\n\n",getSectionName(e,stab.hdr));
+    for(Elf64_Sym* i =symtab;i<&e->buffer[stab.hdr->sh_offset+stab.hdr->sh_size];i++){
         printf("%d %d %s :%p\n",indexToIndex(e,strtab,i->st_name),i->st_name,&e->buffer[strtab->sh_offset+i->st_name],i->st_value);
     }
     // for(char* i =&e->buffer[strtab->sh_offset];i<&e->buffer[strtab->sh_offset+hdr->sh_size];i+=strlen(i)+1){
@@ -217,6 +249,8 @@ void gatherLinkInfo(Elf64* e){
             linkInfo->got = &e->section_headers[i];
         }if(e->section_headers[i].sh_type==SHT_REL || e->section_headers[i].sh_type==SHT_RELA){
             appendVector(&rels,&e->section_headers[i]);
+        }if(e->section_headers[i].sh_type==SHT_HASH){
+            linkInfo->hashtable = &e->section_headers[i];
         }
         
     }
@@ -257,10 +291,21 @@ void processDynamic(Elf64* e,Elf64_Shdr* dyn){
                 appendVector(&needed,(void*)dyn_array[i].d_un.d_val);
                 break;
             case DT_SYMTAB:
-                e->linkInfo.dynamic_symtab = sectionByAddr(e,dyn_array[i].d_un.d_ptr);
+                Elf64_Shdr* sect = sectionByAddr(e,dyn_array[i].d_un.d_ptr);
+                Symtab symtab;
+                symtab.size = sect->sh_size/sizeof(Elf64_Sym);
+                symtab.symtab = &e->buffer[sect->sh_offset];
+                symtab.hdr = sect;
+                e->linkInfo.dynamic_symtab =symtab;
                 break;
             case DT_STRTAB:
-                e->linkInfo.dynamic_strtab = sectionByAddr(e,dyn_array[i].d_un.d_ptr);
+
+                sect = sectionByAddr(e,dyn_array[i].d_un.d_ptr);
+                Strtab strtab;
+                strtab.size = sect->sh_size;
+                strtab.strtab = &e->buffer[sect->sh_offset];
+                strtab.hdr = sect;
+                e->linkInfo.dynamic_strtab = strtab;
                 break;
             case DT_PLTGOT:
                 break;
@@ -290,7 +335,7 @@ void processDynamic(Elf64* e,Elf64_Shdr* dyn){
     e->linkInfo.needed_libraries = (char**) needed.array;
     e->linkInfo.needed_libraries_length = needed.length;
     for(int i =0;i<e->linkInfo.needed_libraries_length;i++){
-        e->linkInfo.needed_libraries[i] =&e->buffer[e->linkInfo.dynamic_strtab->sh_offset+(uint32_t) e->linkInfo.needed_libraries[i] ];
+        e->linkInfo.needed_libraries[i] =&e->buffer[e->linkInfo.dynamic_strtab.hdr->sh_offset+(uint32_t) e->linkInfo.needed_libraries[i] ];
     }
 }
 int inSegments(Elf64* e,Elf64_Shdr* hdr){

@@ -650,5 +650,3 @@ REX prefix relaxable.  */
 #define DT_RELRENT	37
 
 #endif /* _UAPI_LINUX_ELF_H */
-
-
