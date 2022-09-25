@@ -1,5 +1,5 @@
 #include "elfloader.h"
-
+//load libs will always be in reverse topological order of dependencies
 void elfLoad(char* filename){
     Vector global_needed_libraries;
     Vector loadedLibs;
@@ -638,7 +638,6 @@ void loadElf(Elf64* e,Vector* loadedLibs,Vector* global_needed_libraries){
         Elf64* e = parseElf( global_needed_libraries->array[i]);
         loadElf(e,loadedLibs,global_needed_libraries);
         appendVector(loadedLibs,e);
-        
     }
 }
 

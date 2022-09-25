@@ -38,3 +38,43 @@ bool inVector(Vector* v,void* p,compare_t func){
     }
     return false;
 }
+size_t mod(size_t a,size_t b){
+    int m = a%b;
+    return m<0?a+b:m;
+}
+Queue initQueue(){
+    Queue q;
+    q.length=0;
+    q._priv_length=10;
+    q._start=0;
+    q._array=malloc(sizeof(*q._array)*q._priv_length);
+    return q;
+}
+void enQueue(Queue* q,void* value){
+    if(q->length==q->_priv_length){
+        void** new_arr =malloc(q->_priv_length*sizeof(*q->_array)*1.5);
+        size_t end = mod(q->_start+q->length,q->_priv_length);
+        int k =0;
+        for(int i = q->_start;i!=end;i++,k++,i=mod(i,q->_priv_length)){
+            new_arr[k]=q->_array[i];
+        }
+        free(q->_array);
+        q->_array = new_arr;
+        q->_priv_length*=1.5;
+        q->_start=0;
+    }
+    q->_array[(q->_start+q->length)%q->_priv_length]=value;
+}
+void* deQueue(Queue* q){
+    void* r =q->_array[mod(q->_start+q->length-1,q->_priv_length)];
+    q->_start+=1;
+    q->length-=1;
+    q->_start%=q->_priv_length;
+    return r;
+}
+void* getQueue(Queue* q,size_t index){
+    return q->_array[mod(q->_start+index,q->_priv_length)];
+}
+void freeQueue(Queue* q){
+    free(q->_array);
+}
