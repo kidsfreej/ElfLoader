@@ -10,7 +10,7 @@ EXE := $(PROJECT)
 DIR_INC=
 CC_PREFIX := 
 CC := $(CC_PREFIX)gcc
-CFLAG = -gdwarf-2 
+CFLAG = -gdwarf-2
 CLIB = -L .
 
 .PHONY:all

@@ -1,3 +1,8 @@
+/* WARNING TO READERS!
+
+ELF.H IS COMPLETELY COMPRISED OF A COMBINATION OF HEADER FILES FROM VARIOUS GLIBC AND LINUX KERNEL SOURCE
+*/
+
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 #ifndef _UAPI_LINUX_ELF_H
 #define _UAPI_LINUX_ELF_H
@@ -64,6 +69,11 @@ typedef uint64_t	Elf64_Sxword;
  *   http://www.cs.washington.edu/education/courses/cse351/12wi/supp-docs/abi.pdf
  */
 #define PN_XNUM 0xffff
+/* Symbol visibility specification encoded in the st_other field.  */
+#define STV_DEFAULT	0		/* Default symbol visibility rules */
+#define STV_INTERNAL	1		/* Processor specific hidden class */
+#define STV_HIDDEN	2		/* Sym unavailable in other modules */
+#define STV_PROTECTED	3		/* Not preemptible, not exported */
 
 /* These constants define the different elf file types */
 #define ET_NONE   0
@@ -123,7 +133,7 @@ typedef uint64_t	Elf64_Sxword;
 #define STB_LOCAL  0
 #define STB_GLOBAL 1
 #define STB_WEAK   2
-
+#define STB_GNU_UNIQUE 10
 #define STT_NOTYPE  0
 #define STT_OBJECT  1
 #define STT_FUNC    2
@@ -268,23 +278,44 @@ typedef struct elf64_phdr {
 } Elf64_Phdr;
 
 /* sh_type */
-#define SHT_NULL	0
-#define SHT_PROGBITS	1
-#define SHT_SYMTAB	2
-#define SHT_STRTAB	3
-#define SHT_RELA	4
-#define SHT_HASH	5
-#define SHT_DYNAMIC	6
-#define SHT_NOTE	7
-#define SHT_NOBITS	8
-#define SHT_REL		9
-#define SHT_SHLIB	10
-#define SHT_DYNSYM	11
-#define SHT_NUM		12
-#define SHT_LOPROC	0x70000000
-#define SHT_HIPROC	0x7fffffff
-#define SHT_LOUSER	0x80000000
-#define SHT_HIUSER	0xffffffff
+
+#define SHT_NULL	  0		/* Section header table entry unused */
+#define SHT_PROGBITS	  1		/* Program data */
+#define SHT_SYMTAB	  2		/* Symbol table */
+#define SHT_STRTAB	  3		/* String table */
+#define SHT_RELA	  4		/* Relocation entries with addends */
+#define SHT_HASH	  5		/* Symbol hash table */
+#define SHT_DYNAMIC	  6		/* Dynamic linking information */
+#define SHT_NOTE	  7		/* Notes */
+#define SHT_NOBITS	  8		/* Program space with no data (bss) */
+#define SHT_REL		  9		/* Relocation entries, no addends */
+#define SHT_SHLIB	  10		/* Reserved */
+#define SHT_DYNSYM	  11		/* Dynamic linker symbol table */
+#define SHT_INIT_ARRAY	  14		/* Array of constructors */
+#define SHT_FINI_ARRAY	  15		/* Array of destructors */
+#define SHT_PREINIT_ARRAY 16		/* Array of pre-constructors */
+#define SHT_GROUP	  17		/* Section group */
+#define SHT_SYMTAB_SHNDX  18		/* Extended section indices */
+#define SHT_RELR	  19            /* RELR relative relocations */
+#define	SHT_NUM		  20		/* Number of defined types.  */
+#define SHT_LOOS	  0x60000000	/* Start OS-specific.  */
+#define SHT_GNU_ATTRIBUTES 0x6ffffff5	/* Object attributes.  */
+#define SHT_GNU_HASH	  0x6ffffff6	/* GNU-style hash table.  */
+#define SHT_GNU_LIBLIST	  0x6ffffff7	/* Prelink library list */
+#define SHT_CHECKSUM	  0x6ffffff8	/* Checksum for DSO content.  */
+#define SHT_LOSUNW	  0x6ffffffa	/* Sun-specific low bound.  */
+#define SHT_SUNW_move	  0x6ffffffa
+#define SHT_SUNW_COMDAT   0x6ffffffb
+#define SHT_SUNW_syminfo  0x6ffffffc
+#define SHT_GNU_verdef	  0x6ffffffd	/* Version definition section.  */
+#define SHT_GNU_verneed	  0x6ffffffe	/* Version needs section.  */
+#define SHT_GNU_versym	  0x6fffffff	/* Version symbol table.  */
+#define SHT_HISUNW	  0x6fffffff	/* Sun-specific high bound.  */
+#define SHT_HIOS	  0x6fffffff	/* End OS-specific type */
+#define SHT_LOPROC	  0x70000000	/* Start of processor-specific */
+#define SHT_HIPROC	  0x7fffffff	/* End of processor-specific */
+#define SHT_LOUSER	  0x80000000	/* Start of application-specific */
+#define SHT_HIUSER	  0x8fffffff	/* End of application-specific */
 
 /* sh_flags */
 #define SHF_WRITE		0x1
@@ -554,7 +585,7 @@ typedef struct elf64_note {
 #define R_X86_64_PLT32    4      /* 32 bit PLT address */
 #define R_X86_64_COPY     5      /* Copy symbol at runtime */
 #define R_X86_64_GLOB_DAT 6      /* Create GOT entry */
-#define R_X86_64_JUMP_SLOT7      /* Create PLT entry */
+#define R_X86_64_JUMP_SLOT 7      /* Create PLT entry */
 #define R_X86_64_RELATIVE 8      /* Adjust by program base */
 #define R_X86_64_GOTPCREL 9      /* 32 bit signed pc relative
                                             offset to GOT entry */
@@ -608,7 +639,8 @@ REX prefix relaxable.  */
 #define R_X86_64_GNU_VTINHERIT 250       /* GNU C++ hack  */
 #define R_X86_64_GNU_VTENTRY 251   
 
-
+#define ELF_RTYPE_CLASS_PLT 1
+# define ELF_RTYPE_CLASS_COPY 2
 
 
 #define DT_NULL		0
@@ -649,4 +681,19 @@ REX prefix relaxable.  */
 #define DT_RELR		36
 #define DT_RELRENT	37
 
+
+/* ELF_RTYPE_CLASS_PLT iff TYPE describes relocation of a PLT entry or
+   TLS variable, so undefined references should not be allowed to
+   define the value.
+   ELF_RTYPE_CLASS_COPY iff TYPE should not be allowed to resolve to one
+   of the main executable's symbols, as for a COPY reloc.  */
+#define elf_machine_type_class(type)					      \
+  ((((type) == R_X86_64_JUMP_SLOT					      \
+     || (type) == R_X86_64_DTPMOD64					      \
+     || (type) == R_X86_64_DTPOFF64					      \
+     || (type) == R_X86_64_TPOFF64					      \
+     || (type) == R_X86_64_TLSDESC)					      \
+    * ELF_RTYPE_CLASS_PLT)						      \
+   | (((type) == R_X86_64_COPY) * ELF_RTYPE_CLASS_COPY))
+typedef unsigned char byte;
 #endif /* _UAPI_LINUX_ELF_H */

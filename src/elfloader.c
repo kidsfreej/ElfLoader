@@ -1,17 +1,29 @@
 #include "elfloader.h"
-#include <memory.h>
-#include <stdbool.h>
 
-Vector global_needed_libraries;
-Vector loadedLibs;
 void elfLoad(char* filename){
+    Vector global_needed_libraries;
+    Vector loadedLibs;
+
     global_needed_libraries= initVector();
     loadedLibs = initVector();
-    Elf64 e=loadElf(filename);
-    dumpSymbols(&e,e.linkInfo.dynamic_symtab);
-    printf("%d",hashtableGet(&e,"printf").undef);
+    Elf64* e=parseElf(filename);
+    dumpSymbols(e,e->linkInfo.dynamic_symtab);
+    appendVector(&loadedLibs,e);
+    loadElf(e,&loadedLibs,&global_needed_libraries);
+    for(int i =0;i<loadedLibs.length;i++){
+        linkElf(loadedLibs.array[loadedLibs.length-i-1],&loadedLibs);
+    }
     runElf(e);
-    freeElf(&e);
+    for(int i =0;i<loadedLibs.length;i++){
+        freeElf(loadedLibs.array[i]);
+    }
+    freeVector(&loadedLibs);
+    freeVector(&global_needed_libraries);
+    
+}
+void runElf(Elf64* e){
+    char* entry_point = e->runtimeInfo.base+e->header.e_entry;
+    __asm__("jmp %0"::"r"(entry_point));
 }
 unsigned long elf_Hash(const unsigned char *name)
 {
@@ -27,7 +39,7 @@ unsigned long elf_Hash(const unsigned char *name)
         return h;
 }
 uint32_t
-dl_new_hash (const char *s)
+gnu_Hash (const char *s)
 {
 	        uint32_t h = 5381;
 
@@ -57,7 +69,7 @@ size_t fileSize(char* filename){
 	fclose(f);
 	return val;
 }
-Elf64 loadElf( char* filename){
+Elf64* parseElf( char* filename){
     size_t size = fileSize(filename);
     char* buffer=  malloc(size);
     loadFile(filename,buffer,size);
@@ -69,14 +81,14 @@ Elf64 loadElf( char* filename){
     Elf64_Ehdr header = elf.header;
     if(header.e_ident[0]!=ELFMAG0||header.e_ident[1]!=ELFMAG1||header.e_ident[2]!=ELFMAG2||header.e_ident[3]!=ELFMAG3){
         printf("Error reading ELF. Unknown magic !!!");
-        return elf;
+        return NULL;
     }
     if(header.e_ident[4]!=ELFCLASS64){
         printf("Expected 64 bit only ELF");
-        return elf;
+        return NULL;
     }if(header.e_ident[5]!=ELFDATA2LSB){
         printf("Expected little endian");
-        return elf;
+        return NULL;
     }
 
 
@@ -115,7 +127,10 @@ Elf64 loadElf( char* filename){
     elf.buffer = buffer;
     elf.buffer_size = size;
     gatherLinkInfo(&elf);
-    return elf;
+
+    Elf64* ret = malloc(sizeof(*ret));
+    *ret= elf;
+    return ret;
     
 }
 //TODO FIX LOAD SECTION BECAUSE IM LOADING IT LATER THAN ITS BEING ACCESSED WHATEVER OK?!!?
@@ -131,14 +146,64 @@ void loadSection(char* buffer,Elf64_Shdr* hdr,Elf64* e){
             memcpy(&buffer[hdr->sh_addr],&e->buffer[hdr->sh_offset],hdr->sh_size);
     }
 }
+/* this is my code but how this works is explained here: https://flapenguin.me/elf-dt-gnu-hash */
+Symbol gnuHashtableGet(Elf64* e,char* symbol){
+    typedef struct gnu_hash_table {
+        uint32_t nbuckets;
+        uint32_t symoffset;
+        uint32_t bloom_size;
+        uint32_t bloom_shift;
+        uint32_t  arrs[];
+    
+    }gnu_hash_table;
+    gnu_hash_table* hashtable =(gnu_hash_table*) &e->buffer[e->linkInfo.gnuHashtable->sh_offset];
+    uint32_t  bloom_size = hashtable->bloom_size;
+    uint32_t  symoffset = hashtable->symoffset;
+    uint32_t  bloom_shift = hashtable->bloom_shift;
+    uint32_t  nbuckets = hashtable->nbuckets;
+    Elf64_Xword* bloom =(Elf64_Xword*) hashtable->arrs;
+    uint32_t* buckets = (uint32_t*)(bloom+bloom_size);
+    uint32_t* chain = (uint32_t*)(buckets+nbuckets);
+    uint32_t hash = gnu_Hash(symbol);
 
+    /* check in bloom if absent */
+    int mask =bloom[(hash/BITS)%bloom_size];
+    int bit1=hash%BITS;
+    int bit2=(hash>>bloom_shift)%BITS;
+    if(1&(mask>>bit1)&(mask>>bit2)){
+        Symbol s={0};
+        s.undef = true;
+        return s;
+    }
+    Symtab symtab = e->linkInfo.dynamic_symtab;
+    Strtab strtab = e->linkInfo.dynamic_strtab;
+
+    for(int idx=buckets[hash%nbuckets];idx>=symoffset&&!(chain[idx-symoffset]&1);idx++){
+        if(idx>=symtab.size){
+            ERROR("index greater than symtab size");
+        }
+        if(symtab.symtab[idx].st_name>=strtab.size){
+            ERROR("Could not find associated symbol");
+        }
+        if((hash|1)==(chain[idx-symoffset]|1)&&strcmp(symbol,&strtab.strtab[symtab.symtab[idx].st_name])==0){
+            
+            return makeSymbol(symtab.symtab[idx],&strtab.strtab[symtab.symtab[idx].st_name],e);
+        }
+
+    }
+
+    Symbol s={0};
+    s.undef = true;
+    return s;
+
+}
 Symbol hashtableGet(Elf64*e, char* symbol){
     typedef struct ElfHashtable{
        Elf64_Word nbucket; 
        Elf64_Word nchain; 
        Elf64_Word table[]; 
     }ElfHashtable;
-    ElfHashtable* h = &e->buffer[e->linkInfo.hashtable->sh_offset];
+    ElfHashtable* h = (ElfHashtable*)&e->buffer[e->linkInfo.hashtable->sh_offset];
     Elf64_Word* buckets=  &h->table[0];
     Elf64_Word* chain=  &h->table[h->nbucket];
     Symtab symtab = e->linkInfo.dynamic_symtab;
@@ -151,7 +216,7 @@ Symbol hashtableGet(Elf64*e, char* symbol){
     Elf64_Word i = buckets[hash%h->nbucket];
     while(strcmp(&strtab.strtab[symtab.symtab[i].st_name],symbol)!=0){
         i = chain[i];
-        if(i==0){
+        if(i==0){   
             Symbol s={0};
             
             s.undef = true;
@@ -164,6 +229,10 @@ Symbol hashtableGet(Elf64*e, char* symbol){
     s.undef=false;
     s.sym = symtab.symtab[i]; 
     s.object = e;
+    s.value  = s.sym.st_value;
+    s.type = ELF64_ST_TYPE(s.sym.st_info);
+    s.binding = ELF64_ST_BIND(s.sym.st_info);
+    s.size = s.sym.st_size;
     return s;
  }
 
@@ -191,33 +260,112 @@ void dumpSymbols(Elf64* e,Symtab stab){
     Elf64_Shdr* strtab = &e->section_headers[stab.hdr->sh_link];
     
     printf("\n\nSection name: %s\n\n",getSectionName(e,stab.hdr));
-    for(Elf64_Sym* i =symtab;i<&e->buffer[stab.hdr->sh_offset+stab.hdr->sh_size];i++){
+    for(Elf64_Sym* i =symtab;(char*)i<&e->buffer[stab.hdr->sh_offset+stab.hdr->sh_size];i++){
         printf("%d %d %s :%p\n",indexToIndex(e,strtab,i->st_name),i->st_name,&e->buffer[strtab->sh_offset+i->st_name],i->st_value);
     }
     // for(char* i =&e->buffer[strtab->sh_offset];i<&e->buffer[strtab->sh_offset+hdr->sh_size];i+=strlen(i)+1){
     //     printf("d: %s\n",i);
     // }
 }
-
-void retrieveRelSym(Elf64* e,uint64_t sh_link,Elf64_Shdr** symtab,Elf64_Shdr** strtab){
-    *symtab= NULL;
-    *strtab = NULL;
+Symtab makeSymtab(Elf64* e,Elf64_Shdr* symtab){
+    Symtab s;
+    s.hdr  = symtab;
+    s.size = symtab->sh_size/sizeof(Elf64_Sym);
+    s.symtab = (Elf64_Sym*)&e->buffer[symtab->sh_offset];
+    return s; 
+}
+Strtab makeStrtab(Elf64* e,Elf64_Shdr* strtab){
+    Strtab s;
+    s.hdr  = strtab;
+    s.size = strtab->sh_size;
+    s.strtab = &e->buffer[strtab->sh_offset];
+    return s; 
+}
+void retrieveRelSym(Elf64* e,uint64_t sh_link,Symtab* symtab,Strtab* strtab){
+    symtab->symtab=NULL;
+    strtab->strtab=NULL;
     if(sh_link<0 || sh_link>=e->section_headers_length){
         return;
     }
-    *symtab = &e->section_headers[sh_link];
-    uint64_t sym_link =symtab[0]->sh_link; 
+    *symtab= makeSymtab(e, &e->section_headers[sh_link]);
+
+    uint64_t sym_link =symtab->hdr->sh_link; 
     if(sym_link<0 || sym_link>=e->section_headers_length){
         return;
     }
-    *strtab = &e->section_headers[sym_link];
+    *strtab = makeStrtab(e,&e->section_headers[sym_link]);
 }
 
-char* symbolToLibraryBase(char* strsym){
-    printf("NOT IMPLEMENTED ",__LINE__,"\n");
-    return NULL;
+
+Symbol symLookup(Elf64* e,char* symbol,Vector* libs,int type_class){
+    Symbol sym={0};
+    sym.undef=true;
+    bool exitloop = false;
+    for(int i =0;i<libs->length&&!exitloop;i++){
+        Elf64* lib  = libs->array[i];
+        /* ignore copy relocations */
+        if ((type_class & ELF_RTYPE_CLASS_COPY) && lib==e)
+	        continue;
+        Symbol tsym;
+
+        if(lib->linkInfo.gnuHashtable){
+            tsym = gnuHashtableGet(lib,symbol);
+        }else if(lib->linkInfo.hashtable){
+            tsym = hashtableGet(lib,symbol);
+        }else{
+            ERROR("NO GNU HASHTABLE FOR REGULAR HASHTABLE FOR LIBRARY: %s",lib->filename);
+        }
+        
+        if(tsym.undef)
+            continue;
+        /* this line has been copy and pasted + modifed from glibc dl-lookup.c. DEAL WITH IT!!*/
+        if ((tsym.sym.st_value == 0 /* No value.  */
+            && tsym.sym.st_shndx != SHN_ABS
+            && tsym.sym.st_info != STT_TLS)
+            || (type_class & (tsym.sym.st_shndx == SHN_UNDEF)))
+                continue;
+
+        /* ignore local and other symbols */
+        if(tsym.sym.st_other==STV_HIDDEN||tsym.sym.st_other==STV_INTERNAL)
+            continue;
+        
+        switch(tsym.binding){
+            case STB_WEAK:
+                if(!sym.undef){
+                    sym=tsym;
+                }
+                break;
+            case STB_GLOBAL:
+                sym=tsym;
+                exitloop = true;
+                break;
+            case STB_GNU_UNIQUE:
+                ERROR("NOT IMPLEMETED THIS YET STB_GNU_UNIQUE NVM I WILL NEVER IMPLEMENT THIS THIS IS USELESS");
+            default:
+                break;
+
+
+        }
+
+        
+    }
+    return sym;
+
 }
-uint64_t calculateRelocation(Elf64* e,char* runtime,size_t runtime_length,Elf64_Addr r_offset,uint64_t r_info, int64_t r_addend,uint64_t sh_link){
+Symbol makeSymbol(Elf64_Sym sym,char* str,Elf64* e){
+    Symbol s;
+    s.str =str;
+    s.undef=false;
+    s.sym = sym;
+    s.object = e;
+    s.value  = sym.st_value;
+    s.type = ELF64_ST_TYPE(sym.st_info);
+    s.binding = ELF64_ST_BIND(sym.st_info);
+    s.size = sym.st_size;
+    return s;
+}
+//returns size of relocation in bytes.
+void performRelocation(Elf64* e,Elf64_Addr r_offset,uint64_t r_info, int64_t r_addend,uint64_t sh_link,Vector* loadedLibs){
     //s = symbol value
     //a = addend
     //p = r_offset + section address (sh_link)
@@ -226,17 +374,97 @@ uint64_t calculateRelocation(Elf64* e,char* runtime,size_t runtime_length,Elf64_
     //L = DONT USE, R_X86_64_PLT32 IS R_X86_64_PC32 (S+A-P)
     //z = size of symbol
     //G = swear at user
-    Elf64_Shdr* symtab;
-    Elf64_Shdr* strtab;
+
+    Symtab symtab;
+    Strtab strtab;
+
+    byte* reloc_addr = r_offset+e->runtimeInfo.base;
     retrieveRelSym(e,sh_link,&symtab,&strtab);
-    int a = r_addend;
-    // int b= symbolToLibraryBase();
-    int p =r_offset;
-    int got = e->linkInfo.got->sh_addr;
-    return 0;
+    
+    char* symstr = &strtab.strtab[symtab.symtab[ELF64_R_SYM(r_info)].st_name];
+    Elf64_Sym rsym = symtab.symtab[ELF64_R_SYM(r_info)];
+    Symbol sym = makeSymbol(rsym,symstr,e);
+    uint32_t type_class =elf_machine_type_class(ELF64_R_TYPE(r_info));
+    if(ELF64_R_SYM(r_info)>strtab.size){
+        ERROR("Symbol index too large!");
+    }
+    /* this line has been copy and pasted + modifed from glibc dl-lookup.c. DEAL WITH IT!!*/
+    if ((rsym.st_value == 0 /* No value.  */
+        && rsym.st_shndx != SHN_ABS
+        && rsym.st_info != STT_TLS && ELF64_R_SYM(r_info)!=0)
+        || type_class & (rsym.st_shndx == SHN_UNDEF) ||type_class&ELF_RTYPE_CLASS_COPY)
+        sym = symLookup(e,symstr,loadedLibs,elf_machine_type_class(ELF64_R_TYPE(r_info)));
+
+    if(sym.undef)
+        return;
+    
+    size_t s = sym.value;
+    size_t a = r_addend;
+    if(sh_link>=e->section_headers_length)
+        ERROR("ok who allowed this error to happen. this will literally never happen");
+    size_t p =r_offset+e->section_headers[sh_link].sh_addr;
+    byte* b = sym.object->runtimeInfo.base;
+    size_t got=0;
+    if(e->linkInfo.got)
+        got = e->linkInfo.got->sh_addr;
+    size_t z = sym.size;
+    #define reloc(value,size) (*(uint##size##_t*) reloc_addr= (uint##size##_t)value)
+
+    //https://www.intezer.com/blog/malware-analysis/executable-and-linkable-format-101-part-3-relocations/
+    switch(ELF64_R_TYPE(r_info)){
+        case R_X86_64_64:
+            reloc(s+a,64);
+            break;
+        case R_X86_64_PLT32:
+        case R_X86_64_PC32:
+            reloc(s+a,32);
+            break;
+        case R_X86_64_COPY:
+            memcpy(reloc_addr,&sym.object->runtimeInfo.base[s],z);
+            break;
+        case R_X86_64_JUMP_SLOT:
+        case R_X86_64_GLOB_DAT:
+            reloc(s,64);
+            break;
+        case R_X86_64_RELATIVE:
+            reloc(b+a,64);
+            break;  
+        case R_X86_64_32S:
+        case R_X86_64_32:
+            reloc(s+a,32);
+            break;
+        case R_X86_64_16:
+            reloc(s+a,16);
+            break;
+        case R_X86_64_PC16:
+            reloc(s+a-p,16);
+            break;
+        case R_X86_64_8:
+            reloc(s+a,8);
+            break;
+        case R_X86_64_PC8:
+            reloc(s+a-p,8);
+            break;
+        case R_X86_64_PC64:
+            reloc(s+a-p,64);
+            break;
+        case R_X86_64_GOTOFF64:
+            reloc(s+a-got,64);
+            break;
+        case R_X86_64_GOTPC32:
+            reloc(got+a-p,32);
+            break;
+        case R_X86_64_SIZE32:
+            reloc(z+a,32);
+            break;
+        case R_X86_64_SIZE64:
+            reloc(z+a,64);
+            break;
+    }
+    return;
 }
 void performRelocations(){
-    
+
 }
 void gatherLinkInfo(Elf64* e){
     //gather basic link info
@@ -251,6 +479,8 @@ void gatherLinkInfo(Elf64* e){
             appendVector(&rels,&e->section_headers[i]);
         }if(e->section_headers[i].sh_type==SHT_HASH){
             linkInfo->hashtable = &e->section_headers[i];
+        }if(e->section_headers[i].sh_type==SHT_GNU_HASH){
+            linkInfo->gnuHashtable = &e->section_headers[i];
         }
         
     }
@@ -260,13 +490,17 @@ void gatherLinkInfo(Elf64* e){
 
 }
 
-void linkElf(Elf64* e,char* runtime){
+void linkElf(Elf64* e,Vector* loadedLibs){
     Elf64_Shdr** rels = e->linkInfo.rels;
     for(int i =0;i<e->linkInfo.rels_length;i++){
         if(rels[i]->sh_type==SHT_REL){
-            
+            for(Elf64_Rel* p =(Elf64_Rel*) &e->buffer[rels[i]->sh_offset];(char*)p<&e->buffer[rels[i]->sh_offset+rels[i]->sh_size];p++){
+                performRelocation(e,p->r_offset,p->r_info,0,rels[i]->sh_link,loadedLibs);
+            }
         }else if(rels[i]->sh_type==SHT_RELA){
-
+            for(Elf64_Rela* p =(Elf64_Rela*) &e->buffer[rels[i]->sh_offset];(char*)p<&e->buffer[rels[i]->sh_offset+rels[i]->sh_size];p++){
+                performRelocation(e,p->r_offset,p->r_info,p->r_addend,rels[i]->sh_link,loadedLibs);
+            }
 
         }else{
             printf("Unexpected section at line ",__LINE__);
@@ -294,7 +528,7 @@ void processDynamic(Elf64* e,Elf64_Shdr* dyn){
                 Elf64_Shdr* sect = sectionByAddr(e,dyn_array[i].d_un.d_ptr);
                 Symtab symtab;
                 symtab.size = sect->sh_size/sizeof(Elf64_Sym);
-                symtab.symtab = &e->buffer[sect->sh_offset];
+                symtab.symtab =(Elf64_Sym*) &e->buffer[sect->sh_offset];
                 symtab.hdr = sect;
                 e->linkInfo.dynamic_symtab =symtab;
                 break;
@@ -335,7 +569,7 @@ void processDynamic(Elf64* e,Elf64_Shdr* dyn){
     e->linkInfo.needed_libraries = (char**) needed.array;
     e->linkInfo.needed_libraries_length = needed.length;
     for(int i =0;i<e->linkInfo.needed_libraries_length;i++){
-        e->linkInfo.needed_libraries[i] =&e->buffer[e->linkInfo.dynamic_strtab.hdr->sh_offset+(uint32_t) e->linkInfo.needed_libraries[i] ];
+        e->linkInfo.needed_libraries[i] =&e->buffer[e->linkInfo.dynamic_strtab.hdr->sh_offset+(intptr_t) e->linkInfo.needed_libraries[i] ];
     }
 }
 int inSegments(Elf64* e,Elf64_Shdr* hdr){
@@ -349,66 +583,66 @@ int inSegments(Elf64* e,Elf64_Shdr* hdr){
     return 0;
 }
 //returns number of added
-size_t addLibrariesToGlobal(Elf64* e){
+size_t addLibrariesToGlobal(Elf64* e,Vector* global_needed_libraries){
     size_t added = 0;
     char** needed = e->linkInfo.needed_libraries;
     for(int i =0;i<e->linkInfo.needed_libraries_length;i++){
         bool broken = false;
-        for(int k =0;k<global_needed_libraries.length;k++){
-            if(strcmp(needed[i],global_needed_libraries.array[k])==0){
+        for(int k =0;k<global_needed_libraries->length;k++){
+            if(strcmp(needed[i],global_needed_libraries->array[k])==0){
                 broken=true;
                 break;
             }
         }
         if(!broken){
-            appendVector(&global_needed_libraries,needed[i]);
+            appendVector(global_needed_libraries,needed[i]);
             added++;
         }
     }
     return added;
 }
 
-bool libraryEq(Elf64* a,Elf64* b){
-    return strcmp(a->filename,b->filename)==0;
+bool libraryEq(void* elf,void* str){
+    return strcmp(((Elf64*)elf)->filename,(char*)str)==0;
 }
-void runElf(Elf64 e){
+void loadElf(Elf64* e,Vector* loadedLibs,Vector* global_needed_libraries){
    
     size_t allocSize=0;
-    for(int i =0;i<e.section_headers_length;i++){
-        if(e.section_headers[i].sh_addr&& inSegments(&e,&e.section_headers[i])){
-            allocSize= max(allocSize,e.section_headers[i].sh_addr+e.section_headers[i].sh_size);
+    for(int i =0;i<e->section_headers_length;i++){
+        if(e->section_headers[i].sh_addr&& inSegments(e,&e->section_headers[i])){
+            allocSize= max(allocSize,e->section_headers[i].sh_addr+e->section_headers[i].sh_size);
         }
     }
 
 
     char* runtime = largeAlloc(allocSize);
-    printf("\nbuffer%p\n",runtime);
-    for(int i =0;i<e.segments_length;i++){
-        Segment seg= e.segments[i];
-        if(e.program_headers[i].p_type==PT_LOAD){
+    e->runtimeInfo.base = runtime;
+    printf("%s: %p\n",e->filename,runtime);
+    for(int i =0;i<e->segments_length;i++){
+        Segment seg= e->segments[i];
+        if(e->program_headers[i].p_type==PT_LOAD){
             for(int k=0;k<seg.length;k++){
-                loadSection(runtime,seg.sections[k],&e);
+                loadSection(runtime,seg.sections[k],e);
             }   
         }
     }
-    size_t addedLibsCount = addLibrariesToGlobal(&e);
-    size_t upto = global_needed_libraries.length;
-    for(int i =global_needed_libraries.length-addedLibsCount;i<upto;i++){
-        if(inVector(&loadedLibs,global_needed_libraries.array[i],libraryEq)){
+    size_t addedLibsCount = addLibrariesToGlobal(e,global_needed_libraries);
+    size_t upto = global_needed_libraries->length;
+    for(int i =global_needed_libraries->length-addedLibsCount;i<upto;i++){
+        if(inVector(loadedLibs,(void*)global_needed_libraries->array[i],libraryEq)){
             continue;
         }
-        Elf64* e = malloc(sizeof(Elf64));
+        char* fname = global_needed_libraries->array[i];
+        // if(strcmp(fname,"libc.so.6")==0 || strcmp(fname,"libc.so.6")==0)
         
-        *e = loadElf( global_needed_libraries.array[i]);
-        runElf(*e);
-        appendVector(&loadedLibs,e);
+        Elf64* e = parseElf( global_needed_libraries->array[i]);
+        loadElf(e,loadedLibs,global_needed_libraries);
+        appendVector(loadedLibs,e);
         
     }
 }
 
 void freeElf(Elf64* elf){
-    free(elf->program_headers);
-    free(elf->section_headers);
     free(elf->buffer);
     for(int i =0;i<elf->segments_length;i++){
         if(elf->segments[i].sections){
@@ -416,4 +650,7 @@ void freeElf(Elf64* elf){
         }
     }
     free(elf->segments);
+    free(elf->program_headers);
+    free(elf->section_headers);
+
 }

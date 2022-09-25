@@ -32,7 +32,7 @@ void stripVector(Vector* v){
 }
 bool inVector(Vector* v,void* p,compare_t func){
     for(int i =0;i<v->length;i++){
-        if(func(p,v->array[i])){
+        if(func(v->array[i],p)){
             return true;
         }
     }
