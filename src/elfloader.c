@@ -1,30 +1,67 @@
 #include "elfloader.h"
 //load libs will always be in reverse topological order of dependencies
 void elfLoad(char* filename){
-    Vector global_needed_libraries;
+    Queue global_needed_libraries;
     Vector loadedLibs;
 
-    global_needed_libraries= initVector();
+    global_needed_libraries=initQueue();
     loadedLibs = initVector();
-    Elf64* e=parseElf(filename);
-    dumpSymbols(e,e->linkInfo.dynamic_symtab);
-    appendVector(&loadedLibs,e);
-    loadElf(e,&loadedLibs,&global_needed_libraries);
+
+    enQueue(&global_needed_libraries,filename);
+    while(global_needed_libraries.length){
+	    Elf64* cure = parseElf((char*)deQueue(&global_needed_libraries));
+	    appendVector(&loadedLibs,cure);
+	    loadElf(cure,&loadedLibs,&global_needed_libraries);
+    }
     for(int i =0;i<loadedLibs.length;i++){
         linkElf(loadedLibs.array[loadedLibs.length-i-1],&loadedLibs);
     }
-    runElf(e);
+    Elf64* e = (Elf64*)loadedLibs.array[0];
+    dumpSymbols(e,e->linkInfo.dynamic_symtab);
+    runElf((Elf64*)loadedLibs.array[0]);
     for(int i =0;i<loadedLibs.length;i++){
         freeElf(loadedLibs.array[i]);
     }
     freeVector(&loadedLibs);
-    freeVector(&global_needed_libraries);
+    freeQueue(&global_needed_libraries);
     
 }
+void endFunc(){
+	printf("PROGRAM TERMINATED SUCCESFULLY?");
+}
 void runElf(Elf64* e){
-    char* entry_point = e->runtimeInfo.base+e->header.e_entry;
+    void* entry_point = e->runtimeInfo.base+e->header.e_entry;
+	asm("\n\
+	movq %0,%%rax\n\
+	pushq $0\n\
+	pushq $0\n\
+	pushq $0\n\
+	pushq $0\n\
+	pushq $0\n\
+	pushq $0\n\
+	movq %1, %%rdx\n\
+	jmp %0"::"m"(entry_point),"m"(endFunc));
+	__asm__("pushq $0");
+	__asm__("pushq $0");
+	__asm__("pushq $0");
+	__asm__("pushq $0");
+	__asm__("pushq $0");
+	__asm__("pushq $0");
+	__asm__("pushq $0");
+	__asm__("movq %0,%%rdx"::"r"(endFunc));
     __asm__("jmp %0"::"r"(entry_point));
 }
+//DEUB NOTES
+//0x7ffff77fec85 
+//0x7ffff7841ee1
+//0x7ffff78383fd
+//
+//0x7ffff77fec85
+//0x7ffff7fc515d
+//0x7ffff7841ee1
+//0x7ffff78383fd
+//error at 0x7ffff77fe0d0
+//relocation(possibly) at (0x7ffff7bc8048)
 unsigned long elf_Hash(const unsigned char *name)
 {
     unsigned long h = 0, g;
@@ -178,7 +215,7 @@ Symbol gnuHashtableGet(Elf64* e,char* symbol){
     Symtab symtab = e->linkInfo.dynamic_symtab;
     Strtab strtab = e->linkInfo.dynamic_strtab;
 
-    for(int idx=buckets[hash%nbuckets];idx>=symoffset&&!(chain[idx-symoffset]&1);idx++){
+    for(int idx=buckets[hash%nbuckets];idx>=symoffset;idx++){
         if(idx>=symtab.size){
             ERROR("index greater than symtab size");
         }
@@ -189,6 +226,9 @@ Symbol gnuHashtableGet(Elf64* e,char* symbol){
             
             return makeSymbol(symtab.symtab[idx],&strtab.strtab[symtab.symtab[idx].st_name],e);
         }
+		if(chain[idx-symoffset]&1){
+			break;
+		}
 
     }
 
@@ -395,10 +435,11 @@ void performRelocation(Elf64* e,Elf64_Addr r_offset,uint64_t r_info, int64_t r_a
         || type_class & (rsym.st_shndx == SHN_UNDEF) ||type_class&ELF_RTYPE_CLASS_COPY)
         sym = symLookup(e,symstr,loadedLibs,elf_machine_type_class(ELF64_R_TYPE(r_info)));
 
+    size_t s = &sym.object->runtimeInfo.base[sym.value];
     if(sym.undef)
-        return;
+		printf("undefined symbol, relocation failed: %s\n",symstr);
+        s=0x6969;
     
-    size_t s = sym.value;
     size_t a = r_addend;
     if(sh_link>=e->section_headers_length)
         ERROR("ok who allowed this error to happen. this will literally never happen");
@@ -420,7 +461,7 @@ void performRelocation(Elf64* e,Elf64_Addr r_offset,uint64_t r_info, int64_t r_a
             reloc(s+a,32);
             break;
         case R_X86_64_COPY:
-            memcpy(reloc_addr,&sym.object->runtimeInfo.base[s],z);
+            memcpy(reloc_addr,s,z);
             break;
         case R_X86_64_JUMP_SLOT:
         case R_X86_64_GLOB_DAT:
@@ -460,11 +501,15 @@ void performRelocation(Elf64* e,Elf64_Addr r_offset,uint64_t r_info, int64_t r_a
         case R_X86_64_SIZE64:
             reloc(z+a,64);
             break;
+		case R_X86_64_IRELATIVE:;
+			uint64_t v = s+a;
+			v = ((Elf64_Addr(*) (void))v)();
+			reloc(v,64);
+			break;
+		default:
+			printf("UNKNOWNN RELOCATION");
     }
     return;
-}
-void performRelocations(){
-
 }
 void gatherLinkInfo(Elf64* e){
     //gather basic link info
@@ -518,14 +563,14 @@ Elf64_Shdr* sectionByAddr(Elf64* e,Elf64_Addr addr){
 void processDynamic(Elf64* e,Elf64_Shdr* dyn){
     Elf64_Dyn* dyn_array =(Elf64_Dyn*) &e->buffer[dyn->sh_offset];
     Vector needed = initVector();
-
+	Elf64_Shdr* sect;
     for(int i=0; dyn_array[i].d_tag!=DT_NULL&&i*sizeof(*dyn_array)<dyn->sh_size; i++){
         switch(dyn_array[i].d_tag){
             case DT_NEEDED:
                 appendVector(&needed,(void*)dyn_array[i].d_un.d_val);
                 break;
             case DT_SYMTAB:
-                Elf64_Shdr* sect = sectionByAddr(e,dyn_array[i].d_un.d_ptr);
+                sect = sectionByAddr(e,dyn_array[i].d_un.d_ptr);
                 Symtab symtab;
                 symtab.size = sect->sh_size/sizeof(Elf64_Sym);
                 symtab.symtab =(Elf64_Sym*) &e->buffer[sect->sh_offset];
@@ -582,32 +627,31 @@ int inSegments(Elf64* e,Elf64_Shdr* hdr){
     }
     return 0;
 }
+bool checkAdded(void* elf,void* name){
+	return strcmp(((Elf64*)elf)->filename,(char*)name)==0;
+}
+bool checkLibraries(void* a,void* b){
+	return strcmp((char*)a,(char*)b)==0;
+}
+
 //returns number of added
-size_t addLibrariesToGlobal(Elf64* e,Vector* global_needed_libraries){
+void addLibrariesToQueue(Elf64* e,Vector* addedLibs, Queue* global_needed_libraries){
     size_t added = 0;
     char** needed = e->linkInfo.needed_libraries;
     for(int i =0;i<e->linkInfo.needed_libraries_length;i++){
-        bool broken = false;
-        for(int k =0;k<global_needed_libraries->length;k++){
-            if(strcmp(needed[i],global_needed_libraries->array[k])==0){
-                broken=true;
-                break;
-            }
-        }
-        if(!broken){
-            appendVector(global_needed_libraries,needed[i]);
-            added++;
-        }
+	    char* libname = needed[i];
+	    if(inVector(addedLibs,libname,checkAdded)||inQueue(global_needed_libraries,libname,checkLibraries))
+		continue;
+	    enQueue(global_needed_libraries,libname);
+
     }
-    return added;
 }
 
 bool libraryEq(void* elf,void* str){
     return strcmp(((Elf64*)elf)->filename,(char*)str)==0;
 }
-void loadElf(Elf64* e,Vector* loadedLibs,Vector* global_needed_libraries){
-   
-    size_t allocSize=0;
+void loadElf(Elf64* e,Vector* loadedLibs,Queue* global_needed_libraries){
+   size_t allocSize=0;
     for(int i =0;i<e->section_headers_length;i++){
         if(e->section_headers[i].sh_addr&& inSegments(e,&e->section_headers[i])){
             allocSize= max(allocSize,e->section_headers[i].sh_addr+e->section_headers[i].sh_size);
@@ -626,19 +670,7 @@ void loadElf(Elf64* e,Vector* loadedLibs,Vector* global_needed_libraries){
             }   
         }
     }
-    size_t addedLibsCount = addLibrariesToGlobal(e,global_needed_libraries);
-    size_t upto = global_needed_libraries->length;
-    for(int i =global_needed_libraries->length-addedLibsCount;i<upto;i++){
-        if(inVector(loadedLibs,(void*)global_needed_libraries->array[i],libraryEq)){
-            continue;
-        }
-        char* fname = global_needed_libraries->array[i];
-        // if(strcmp(fname,"libc.so.6")==0 || strcmp(fname,"libc.so.6")==0)
-        
-        Elf64* e = parseElf( global_needed_libraries->array[i]);
-        loadElf(e,loadedLibs,global_needed_libraries);
-        appendVector(loadedLibs,e);
-    }
+    addLibrariesToQueue(e,loadedLibs,global_needed_libraries);
 }
 
 void freeElf(Elf64* elf){

@@ -55,7 +55,7 @@ void enQueue(Queue* q,void* value){
         void** new_arr =malloc(q->_priv_length*sizeof(*q->_array)*1.5);
         size_t end = mod(q->_start+q->length,q->_priv_length);
         int k =0;
-        for(int i = q->_start;i!=end;i++,k++,i=mod(i,q->_priv_length)){
+        for(int i = q->_start;i!=end||k==0;i++,k++,i=mod(i,q->_priv_length)){
             new_arr[k]=q->_array[i];
         }
         free(q->_array);
@@ -64,9 +64,10 @@ void enQueue(Queue* q,void* value){
         q->_start=0;
     }
     q->_array[(q->_start+q->length)%q->_priv_length]=value;
+    q->length++;
 }
 void* deQueue(Queue* q){
-    void* r =q->_array[mod(q->_start+q->length-1,q->_priv_length)];
+    void* r =q->_array[mod(q->_start,q->_priv_length)];
     q->_start+=1;
     q->length-=1;
     q->_start%=q->_priv_length;
@@ -77,4 +78,14 @@ void* getQueue(Queue* q,size_t index){
 }
 void freeQueue(Queue* q){
     free(q->_array);
+}
+
+bool inQueue(Queue* q,void* value,compare_t f){
+	for(int i =0;i<q->length;i++){
+		void* v = getQueue(q,i);
+		if(f(v,value)){
+			return true;
+		}
+	}
+	return false;
 }

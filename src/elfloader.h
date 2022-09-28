@@ -1,5 +1,4 @@
-#ifndef ELFLOADER
-#define ELFLOADER
+#ifndef ELFLOADER_H #define ELFLOADER_H
 
 #include <stdio.h>
 #include "buffer.h"
@@ -71,7 +70,9 @@ typedef struct Elf64{
     RuntimeInfo runtimeInfo;
     char* filename;
 }Elf64;
-
+#ifndef max
+#define max(a,b)(a<b?b:a)
+#endif
 #define BITS 64
 #define ERROR(x...) (printf("ERROR LINE ",__LINE__,": ",x))
 
@@ -98,9 +99,9 @@ void linkElf(Elf64* e,Vector* loadedLibs);
 Elf64_Shdr* sectionByAddr(Elf64* e,Elf64_Addr addr);
 void processDynamic(Elf64* e,Elf64_Shdr* dyn);
 int inSegments(Elf64* e,Elf64_Shdr* hdr);
-size_t addLibrariesToGlobal(Elf64* e,Vector* global_needed_libraries);
+void addLibrariesToGlobal(Elf64* e,Vector* loadedLibs,Queue* global_needed_libraries);
 bool libraryEq(void* elf,void* str);
-void loadElf(Elf64* e,Vector* loadedLibs,Vector* global_needed_libraries);
+void loadElf(Elf64* e,Vector* loadedLibs,Queue* global_needed_libraries);
 void freeElf(Elf64* elf);
 
 #endif

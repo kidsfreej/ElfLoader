@@ -1,3 +1,7 @@
+
+#ifndef DATASTRUCTURES_H
+#define DATASTRUCTURES_H
+
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -24,3 +28,5 @@ void enQueue(Queue* q,void* value);
 void* deQueue(Queue* q);
 void* getQueue(Queue* q,size_t index);
 void freeQueue(Queue* q);
+bool inQueue(Queue* q,void* value, compare_t f);
+#endif
