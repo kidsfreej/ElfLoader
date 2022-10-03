@@ -1,20 +1,26 @@
 #include "elfloader.h"
-//load libs will always be in reverse topological order of dependencies
+
 void elfLoad(char* filename){
     Queue global_needed_libraries;
     Vector loadedLibs;
-
+    Vector loadedDlls = initVector();
+    loadNecessaryDlls(&loadedDlls);
     global_needed_libraries=initQueue();
     loadedLibs = initVector();
 
     enQueue(&global_needed_libraries,filename);
     while(global_needed_libraries.length){
-	    Elf64* cure = parseElf((char*)deQueue(&global_needed_libraries));
+        char* libname = (char*)deQueue(&global_needed_libraries);
+        if(strcmp(libname,"libc.so.6")==0){
+            continue;
+            
+        }
+	    Elf64* cure = parseElf(libname);
 	    appendVector(&loadedLibs,cure);
 	    loadElf(cure,&loadedLibs,&global_needed_libraries);
     }
     for(int i =0;i<loadedLibs.length;i++){
-        linkElf(loadedLibs.array[loadedLibs.length-i-1],&loadedLibs);
+        linkElf(loadedLibs.array[loadedLibs.length-i-1],&loadedLibs,&loadedDlls);
     }
     Elf64* e = (Elf64*)loadedLibs.array[0];
     dumpSymbols(e,e->linkInfo.dynamic_symtab);
@@ -24,7 +30,8 @@ void elfLoad(char* filename){
     }
     freeVector(&loadedLibs);
     freeQueue(&global_needed_libraries);
-    
+    freeDlls(&loadedDlls);
+    freeVector(&loadedDlls);
 }
 void endFunc(){
 	printf("PROGRAM TERMINATED SUCCESFULLY?");
@@ -101,6 +108,9 @@ size_t loadFile( char* filename,char* buffer,size_t size){
 }
 size_t fileSize(char* filename){
 	FILE* f=fopen(filename,"r");
+    if(!f){
+        ERROR("reading file size");
+    }
 	fseek(f,0,SEEK_END);
 	size_t val = ftell(f);
 	fclose(f);
@@ -336,8 +346,7 @@ void retrieveRelSym(Elf64* e,uint64_t sh_link,Symtab* symtab,Strtab* strtab){
     *strtab = makeStrtab(e,&e->section_headers[sym_link]);
 }
 
-
-Symbol symLookup(Elf64* e,char* symbol,Vector* libs,int type_class){
+Symbol symLookup(Elf64* e,char* symbol,Vector* libs,int type_class,Vector* loadedDlls){
     Symbol sym={0};
     sym.undef=true;
     bool exitloop = false;
@@ -388,7 +397,26 @@ Symbol symLookup(Elf64* e,char* symbol,Vector* libs,int type_class){
         }
 
         
+    }  
+    if(sym.undef){
+        for(size_t i = 0;i<loadedDlls->length;i++){
+            byte* addr = GetProcAddress(loadedDlls->array[i],symbol);
+            if(!addr)
+                continue;
+            Symbol s ={0};
+            s.undef=false;
+            s.binding=0;
+            s.str=symbol;
+            s.type=NULL;
+            s.value=addr;
+            s.fromDll=true;
+            s.size=BITS/8;
+            return s;
+
+        }
     }
+        
+
     return sym;
 
 }
@@ -404,8 +432,26 @@ Symbol makeSymbol(Elf64_Sym sym,char* str,Elf64* e){
     s.size = sym.st_size;
     return s;
 }
+
+void loadNecessaryDlls(Vector* loadedDlls){
+
+    char* libraries[]= {"C:\\Users\\Julian\\Downloads\\randomcresting\\libwinpthread-1.dll","msvcrt.dll"};
+    for(size_t i =0;i<sizeof_array(libraries);i++){
+            
+        appendVector(loadedDlls,LoadLibraryA(libraries[i]));
+
+    }
+    // print
+    // f("SUCESS");
+}
+void freeDlls(Vector* loadedDlls){
+    for(size_t i =0;i<loadedDlls->length;i++){
+        FreeLibrary(loadedDlls->array[i]);
+    }
+}
+
 //returns size of relocation in bytes.
-void performRelocation(Elf64* e,Elf64_Addr r_offset,uint64_t r_info, int64_t r_addend,uint64_t sh_link,Vector* loadedLibs){
+void performRelocation(Elf64* e,Elf64_Addr r_offset,uint64_t r_info, int64_t r_addend,uint64_t sh_link,Vector* loadedLibs,Vector* loadedDlls){
     //s = symbol value
     //a = addend
     //p = r_offset + section address (sh_link)
@@ -433,18 +479,27 @@ void performRelocation(Elf64* e,Elf64_Addr r_offset,uint64_t r_info, int64_t r_a
         && rsym.st_shndx != SHN_ABS
         && rsym.st_info != STT_TLS && ELF64_R_SYM(r_info)!=0)
         || type_class & (rsym.st_shndx == SHN_UNDEF) ||type_class&ELF_RTYPE_CLASS_COPY)
-        sym = symLookup(e,symstr,loadedLibs,elf_machine_type_class(ELF64_R_TYPE(r_info)));
+        sym = symLookup(e,symstr,loadedLibs,elf_machine_type_class(ELF64_R_TYPE(r_info)),loadedDlls);
 
-    size_t s = &sym.object->runtimeInfo.base[sym.value];
-    if(sym.undef)
+    size_t s=tramplineFunction;
+    byte* b = 0x420420;
+    if(sym.undef){
 		printf("undefined symbol, relocation failed: %s\n",symstr);
-        s=0x6969;
-    
+    }
+    else{
+        if(sym.fromDll){
+            s=sym.value;
+            b= NULL;
+        }else{
+            s = &sym.object->runtimeInfo.base[sym.value];
+            b = sym.object->runtimeInfo.base;
+        }
+    }
     size_t a = r_addend;
     if(sh_link>=e->section_headers_length)
         ERROR("ok who allowed this error to happen. this will literally never happen");
     size_t p =r_offset+e->section_headers[sh_link].sh_addr;
-    byte* b = sym.object->runtimeInfo.base;
+    
     size_t got=0;
     if(e->linkInfo.got)
         got = e->linkInfo.got->sh_addr;
@@ -535,16 +590,16 @@ void gatherLinkInfo(Elf64* e){
 
 }
 
-void linkElf(Elf64* e,Vector* loadedLibs){
+void linkElf(Elf64* e,Vector* loadedLibs,Vector* loadedDlls){
     Elf64_Shdr** rels = e->linkInfo.rels;
     for(int i =0;i<e->linkInfo.rels_length;i++){
         if(rels[i]->sh_type==SHT_REL){
             for(Elf64_Rel* p =(Elf64_Rel*) &e->buffer[rels[i]->sh_offset];(char*)p<&e->buffer[rels[i]->sh_offset+rels[i]->sh_size];p++){
-                performRelocation(e,p->r_offset,p->r_info,0,rels[i]->sh_link,loadedLibs);
+                performRelocation(e,p->r_offset,p->r_info,0,rels[i]->sh_link,loadedLibs,loadedDlls);
             }
         }else if(rels[i]->sh_type==SHT_RELA){
             for(Elf64_Rela* p =(Elf64_Rela*) &e->buffer[rels[i]->sh_offset];(char*)p<&e->buffer[rels[i]->sh_offset+rels[i]->sh_size];p++){
-                performRelocation(e,p->r_offset,p->r_info,p->r_addend,rels[i]->sh_link,loadedLibs);
+                performRelocation(e,p->r_offset,p->r_info,p->r_addend,rels[i]->sh_link,loadedLibs,loadedDlls);
             }
 
         }else{

@@ -1,4 +1,6 @@
-#ifndef ELFLOADER_H #define ELFLOADER_H
+#ifndef ELFLOADER
+#define ELFLOADER
+
 
 #include <stdio.h>
 #include "buffer.h"
@@ -30,6 +32,7 @@ typedef struct{
     uint64_t type;
     uint64_t binding;
     uint64_t size;
+    bool fromDll;
     bool undef;
     struct Elf64* object;
 }Symbol;
@@ -76,8 +79,13 @@ typedef struct Elf64{
 #define BITS 64
 #define ERROR(x...) (printf("ERROR LINE ",__LINE__,": ",x))
 
+
+void linkElf(Elf64* e,Vector* loadedLibs,Vector* loadedDlls);
 void elfLoad(char* filename);
+void endFunc();
+void runElf(Elf64* e);
 unsigned long elf_Hash(const unsigned char *name);
+uint32_t;
 size_t loadFile( char* filename,char* buffer,size_t size);
 size_t fileSize(char* filename);
 Elf64* parseElf( char* filename);
@@ -90,16 +98,17 @@ void dumpSymbols(Elf64* e,Symtab stab);
 Symtab makeSymtab(Elf64* e,Elf64_Shdr* symtab);
 Strtab makeStrtab(Elf64* e,Elf64_Shdr* strtab);
 void retrieveRelSym(Elf64* e,uint64_t sh_link,Symtab* symtab,Strtab* strtab);
-Symbol symLookup(Elf64* e,char* symbol,Vector* libs,int type_class);
+Symbol symLookup(Elf64* e,char* symbol,Vector* libs,int type_class,Vector* loadedDlls);
 Symbol makeSymbol(Elf64_Sym sym,char* str,Elf64* e);
-void performRelocation(Elf64* e,Elf64_Addr r_offset,uint64_t r_info, int64_t r_addend,uint64_t sh_link,Vector* loadedLibs);
-void performRelocations();
+void performRelocation(Elf64* e,Elf64_Addr r_offset,uint64_t r_info, int64_t r_addend,uint64_t sh_link,Vector* loadedLibs,Vector* loadedDlls);
 void gatherLinkInfo(Elf64* e);
-void linkElf(Elf64* e,Vector* loadedLibs);
+
 Elf64_Shdr* sectionByAddr(Elf64* e,Elf64_Addr addr);
 void processDynamic(Elf64* e,Elf64_Shdr* dyn);
 int inSegments(Elf64* e,Elf64_Shdr* hdr);
-void addLibrariesToGlobal(Elf64* e,Vector* loadedLibs,Queue* global_needed_libraries);
+bool checkAdded(void* elf,void* name);
+bool checkLibraries(void* a,void* b);
+void addLibrariesToQueue(Elf64* e,Vector* addedLibs, Queue* global_needed_libraries);
 bool libraryEq(void* elf,void* str);
 void loadElf(Elf64* e,Vector* loadedLibs,Queue* global_needed_libraries);
 void freeElf(Elf64* elf);
