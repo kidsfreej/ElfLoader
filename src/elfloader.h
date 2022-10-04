@@ -4,7 +4,7 @@
 
 #include <stdio.h>
 #include "buffer.h"
-#include "elf.h"
+#include <elf.h>
 #include "datastructures.h"
 struct Elf64;
 

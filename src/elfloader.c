@@ -37,26 +37,18 @@ void endFunc(){
 	printf("PROGRAM TERMINATED SUCCESFULLY?");
 }
 void runElf(Elf64* e){
+
     void* entry_point = e->runtimeInfo.base+e->header.e_entry;
 	asm("\n\
 	movq %0,%%rax\n\
-	pushq $0\n\
-	pushq $0\n\
-	pushq $0\n\
-	pushq $0\n\
-	pushq $0\n\
-	pushq $0\n\
+    pushq $0 \n\
+    pushq $0\n\
+    pushq $0\n\
+    pushq $0\n\
+    pushq $0\n\
 	movq %1, %%rdx\n\
 	jmp %0"::"m"(entry_point),"m"(endFunc));
-	__asm__("pushq $0");
-	__asm__("pushq $0");
-	__asm__("pushq $0");
-	__asm__("pushq $0");
-	__asm__("pushq $0");
-	__asm__("pushq $0");
-	__asm__("pushq $0");
-	__asm__("movq %0,%%rdx"::"r"(endFunc));
-    __asm__("jmp %0"::"r"(entry_point));
+
 }
 //DEUB NOTES
 //0x7ffff77fec85 
@@ -398,7 +390,9 @@ Symbol symLookup(Elf64* e,char* symbol,Vector* libs,int type_class,Vector* loade
 
         
     }  
+    //if no symbol found
     if(sym.undef){
+        //search dlls for symbol
         for(size_t i = 0;i<loadedDlls->length;i++){
             byte* addr = GetProcAddress(loadedDlls->array[i],symbol);
             if(!addr)
@@ -435,21 +429,26 @@ Symbol makeSymbol(Elf64_Sym sym,char* str,Elf64* e){
 
 void loadNecessaryDlls(Vector* loadedDlls){
 
-    char* libraries[]= {"C:\\Users\\Julian\\Downloads\\randomcresting\\libwinpthread-1.dll","msvcrt.dll"};
+    char* libraries[]= {"win_glibc.dll","msvcrt.dll"};
     for(size_t i =0;i<sizeof_array(libraries);i++){
-            
-        appendVector(loadedDlls,LoadLibraryA(libraries[i]));
-
+        HMODULE dll;
+        if(dll = LoadLibraryA(libraries[i])){
+            printf("dll: %s %p\n",libraries[i],dll);
+            appendVector(loadedDlls,dll);
+        }else{
+            printf("COULD NOT FIND DLL %s\n",libraries[i]);
+        }
+        
     }
-    // print
-    // f("SUCESS");
 }
 void freeDlls(Vector* loadedDlls){
     for(size_t i =0;i<loadedDlls->length;i++){
         FreeLibrary(loadedDlls->array[i]);
     }
 }
-
+void trampolineFunction(){
+    return;
+}
 //returns size of relocation in bytes.
 void performRelocation(Elf64* e,Elf64_Addr r_offset,uint64_t r_info, int64_t r_addend,uint64_t sh_link,Vector* loadedLibs,Vector* loadedDlls){
     //s = symbol value
@@ -481,7 +480,7 @@ void performRelocation(Elf64* e,Elf64_Addr r_offset,uint64_t r_info, int64_t r_a
         || type_class & (rsym.st_shndx == SHN_UNDEF) ||type_class&ELF_RTYPE_CLASS_COPY)
         sym = symLookup(e,symstr,loadedLibs,elf_machine_type_class(ELF64_R_TYPE(r_info)),loadedDlls);
 
-    size_t s=tramplineFunction;
+    size_t s=trampolineFunction;
     byte* b = 0x420420;
     if(sym.undef){
 		printf("undefined symbol, relocation failed: %s\n",symstr);

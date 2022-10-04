@@ -1,4 +1,4 @@
-PROJECT := main.exe
+PROJECT := win_glibc.dll
 
 DIR_SRC += .
 
@@ -6,25 +6,25 @@ DIR_SRC += .
 SRC_C += $(wildcard $(addsuffix /*.c, $(DIR_SRC)))
 #OBJ := $(filter %.o, $(SRC_C:.c=.o))
 OBJ := $(patsubst %.c, %.o, $(SRC_C))
-EXE := $(PROJECT)
+DLL := $(PROJECT)
 DIR_INC=
 CC_PREFIX := 
 CC := $(CC_PREFIX)gcc
+
 CLIB = -L .
 
 .PHONY:all
 
-all:$(OBJ) $(EXE) build run
+all:$(OBJ) $(DLL) build
 
 %.o: %.c
 	    $(CC) $(CFLAG) $(DIR_INC) -c $< -o $@ 
 
-$(EXE): $(OBJ)
-	    $(CC) $(CFLAG) $(CLIB) $(OBJ) -o $@ 
+$(DLL): $(OBJ)
+	    $(CC) $(CFLAG) $(CLIB) $(OBJ) -shared -o $@ 
+
+build: $(DLL)
+		cp $(DLL) $(BUILD_DIR)/$(DLL)
 
 clean:
-	    rm -rf $(EXE) $(OBJ) 
-build: $(EXE)
-		cp $(EXE) $(BUILD_DIR)/$(EXE)
-run:
-	$(BUILD_DIR)/$(EXE)
+	    rm -rf $(DLL) $(OBJ) 
