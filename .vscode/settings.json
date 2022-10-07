@@ -5,6 +5,7 @@
         "memory.h": "c",
         "stdint.h": "c",
         "datastructures.h": "c",
-        "stdio.h": "c"
+        "stdio.h": "c",
+        "trampoline.h": "c"
     }
 }

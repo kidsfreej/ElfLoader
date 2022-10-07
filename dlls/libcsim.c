@@ -7,13 +7,13 @@
 //my own version of https://codebrowser.dev/glibc/glibc/csu/libc-start.c.html#234
 int __libc_start_main()
 {
-    int(*main)(int, char** ,char** ,void*);
+    int __attribute__((sysv_abi)) (*main)(int, char** ,char** ,void*);
     uint64_t argc;
     char** argv;
     auxv_t* auxves;
-    int(*init)(int, char** ,char** ,void*);
-    void(* fini)(void);
-    void (*rtld_fini) (void);
+    int __attribute__((sysv_abi)) (*init)(int, char** ,char** ,void*);
+    void __attribute__((sysv_abi)) (* fini)(void);
+    void __attribute__((sysv_abi)) (*rtld_fini) (void);
 	void *stack_end;
     //glibc sysdeps/x86_64/start.S
     // main:		%rdi

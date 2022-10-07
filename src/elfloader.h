@@ -1,7 +1,7 @@
 #ifndef ELFLOADER
 #define ELFLOADER
 
-
+#include "trampoline.h"
 #include <stdio.h>
 #include "buffer.h"
 #include <elf.h>

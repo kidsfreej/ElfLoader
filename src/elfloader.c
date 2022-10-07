@@ -1,6 +1,9 @@
 #include "elfloader.h"
-
+char* trampolineBlock =NULL;
 void elfLoad(char* filename){
+    if(!trampolineBlock){
+        trampolineBlock= largeAlloc(100000);
+    }
     Queue global_needed_libraries;
     Vector loadedLibs;
     Vector loadedDlls = initVector();
@@ -397,12 +400,18 @@ Symbol symLookup(Elf64* e,char* symbol,Vector* libs,int type_class,Vector* loade
             byte* addr = GetProcAddress(loadedDlls->array[i],symbol);
             if(!addr)
                 continue;
+            
             Symbol s ={0};
             s.undef=false;
             s.binding=0;
             s.str=symbol;
             s.type=NULL;
-            s.value=addr;
+            if(strcmp("__libc_start_main",symbol)==0){
+                s.value = addr;
+            }else{
+                s.value=(uint64_t)generateFunction(addr,trampolineBlock,0);
+
+            }
             s.fromDll=true;
             s.size=BITS/8;
             return s;
@@ -446,9 +455,6 @@ void freeDlls(Vector* loadedDlls){
         FreeLibrary(loadedDlls->array[i]);
     }
 }
-void trampolineFunction(){
-    return;
-}
 //returns size of relocation in bytes.
 void performRelocation(Elf64* e,Elf64_Addr r_offset,uint64_t r_info, int64_t r_addend,uint64_t sh_link,Vector* loadedLibs,Vector* loadedDlls){
     //s = symbol value
@@ -480,7 +486,7 @@ void performRelocation(Elf64* e,Elf64_Addr r_offset,uint64_t r_info, int64_t r_a
         || type_class & (rsym.st_shndx == SHN_UNDEF) ||type_class&ELF_RTYPE_CLASS_COPY)
         sym = symLookup(e,symstr,loadedLibs,elf_machine_type_class(ELF64_R_TYPE(r_info)),loadedDlls);
 
-    size_t s=trampolineFunction;
+    size_t s=0x69696;
     byte* b = 0x420420;
     if(sym.undef){
 		printf("undefined symbol, relocation failed: %s\n",symstr);
